@@ -3,7 +3,10 @@
 vendor
 .vscode
 .DS_Store
+<<<<<<< HEAD
 test/
 docs/
 config.json
 /config.json
+=======
+>>>>>>> pengyc
