@@ -1,0 +1,9 @@
+*.log
+.idea/*
+vendor
+.vscode
+.DS_Store
+test/
+docs/
+config.json
+/config.json
