@@ -1,4 +1,4 @@
-module PycMono/server/go-context-sdk
+module PycMono/go-context-sdk
 
 go 1.20
 
