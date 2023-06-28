@@ -1,4 +1,4 @@
-package goctx
+package ctxsdk
 
 import "errors"
 

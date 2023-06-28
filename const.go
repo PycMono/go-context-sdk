@@ -1,4 +1,4 @@
-package goctx
+package ctxsdk
 
 const (
 	ctxKey          string = "template-ctx"
