@@ -1,4 +1,4 @@
-module PycMono/go-context-sdk
+module github.com/PycMono/go-context-sdk
 
 go 1.20
 
@@ -10,6 +10,7 @@ require (
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.1.2 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
 	go.uber.org/atomic v1.11.0 // indirect
