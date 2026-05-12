@@ -1,6 +1,6 @@
 module github.com/PycMono/go-context-sdk
 
-go 1.20
+go 1.25.0
 
 require (
 	github.com/google/uuid v1.3.0
