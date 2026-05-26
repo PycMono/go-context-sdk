@@ -17,8 +17,8 @@ var (
 )
 
 func init() {
-	var stop = make(chan os.Signal, 2)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGABRT, syscall.SIGALRM, syscall.SIGBUS, syscall.SIGCHLD, syscall.SIGCONT, syscall.SIGEMT, syscall.SIGFPE, syscall.SIGHUP, syscall.SIGILL, syscall.SIGINFO, syscall.SIGINT, syscall.SIGIO, syscall.SIGIOT, syscall.SIGKILL, syscall.SIGPIPE, syscall.SIGPROF, syscall.SIGQUIT, syscall.SIGSEGV, syscall.SIGSTOP, syscall.SIGSYS, syscall.SIGTERM, syscall.SIGTRAP, syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU, syscall.SIGURG, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGVTALRM, syscall.SIGWINCH, syscall.SIGXCPU, syscall.SIGXFSZ)
+	var stop = make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
 
 	// 启动tracing
 	go start(stop)
@@ -59,7 +59,6 @@ func start(stop chan os.Signal) {
 
 	defer func() {
 		log.Println("结束tracing...")
-		close(stop)
 		err = closer.Close()
 		if err != nil {
 			log.Println("tracer close:", err)
@@ -68,13 +67,8 @@ func start(stop chan os.Signal) {
 
 	opentracing.SetGlobalTracer(tracer)
 
-	select {
-	case st := <-stop:
-		{
-			log.Println("tracer stop:", st)
-			return
-		}
-	}
+	st := <-stop
+	log.Println("tracer stop:", st)
 }
 
 // ServiceName 服务名称

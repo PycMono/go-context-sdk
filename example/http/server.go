@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/PycMono/go-context-sdk/bizctx"
 	"github.com/PycMono/go-context-sdk/tracing"
+	tracinglog "github.com/opentracing/opentracing-go/log"
 	"io"
 	"net"
 	"net/http"
@@ -29,17 +31,27 @@ func NewServer(forward, grpcForward, welcome string) (*server, error) {
 
 // SpanHandler echos back the request body as a response
 func (s *server) SpanHandler(writer http.ResponseWriter, request *http.Request) {
-	span := tracing.StartNewSpan("span-test-parent")
+	ctx := request.Context()
+
+	// 从 context 中恢复 parent span 并创建子 span
+	span := tracing.StartSpanFromContext(ctx, "span-test-parent")
 	defer span.Finish()
 
 	nspan := span.StartChildSpan("span-test-op1")
 	nspan.SetTag("my-custom-account", "user1")
+	nspan.LogFields(
+		tracinglog.String("event", "custom-log"),
+		tracinglog.String("account", "user1"),
+	)
 	nspan.Finish()
 
 	nspan = span.StartChildSpan("span-test-op2")
 	nspan.Finish()
 
-	ctx := span.WithContextSetOpentracing(request.Context())
+	// 在内存中设置业务上下文（bizctx 的 HTTP 传输由 go-gin-sdk 或业务方自行实现）
+	ctx = bizctx.WithKV(ctx, bizctx.UserID("user1"), bizctx.TenantID("tenant1"))
+
+	// 发起下游 HTTP 调用（tracing 跨服务传播保留，bizctx HTTP 传播需由上层框架处理）
 	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5005/test-span", nil)
 	tracing.Inject(req, span)
 	resp, err := http.DefaultClient.Do(req)
@@ -54,22 +66,16 @@ func (s *server) SpanHandler(writer http.ResponseWriter, request *http.Request) 
 	}
 	s.writeResult(ctx, writer, b)
 
-	//resp, err := grequestsx.Get(s.forward+"/test-span", opts)
-	//if err != nil {
-	//	httpError(writer, err)
-	//	return
-	//}
-	//s.writeResult(bizctx, writer, resp.Bytes())
-	//return
-
 	s.writeResult(ctx, writer, []byte("ok"))
 }
 
 func (s *server) Redirect(writer http.ResponseWriter, request *http.Request) {
+	ctx := request.Context()
 	span, _ := tracing.Extract(request)
 	nspan := span.StartChildSpan("span-test-op2")
 	nspan.Finish()
-	ctx := nspan.WithContextSetOpentracing(request.Context())
+	ctx = nspan.WithOpentracingContext(ctx)
+
 	s.writeResult(ctx, writer, []byte("ok"))
 }
 
@@ -78,8 +84,10 @@ func (s *server) writeResult(ctx context.Context, writer http.ResponseWriter, da
 
 	writer.Write(data)
 	writer.Write([]byte(fmt.Sprintf("----via %s, ip: %s-----\n", s.hostname, s.ip)))
-	writer.Write([]byte(fmt.Sprintf("----headers: %v", span)))
-	writer.Write([]byte("\n\n"))
+	writer.Write([]byte(fmt.Sprintf("----headers: %v\n", span)))
+	writer.Write([]byte(fmt.Sprintf("----userid: %s, tenantid: %s\n",
+		bizctx.GetUserID(ctx), bizctx.GetTenantID(ctx))))
+	writer.Write([]byte("\n"))
 }
 
 func httpError(writer http.ResponseWriter, err error) {

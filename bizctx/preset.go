@@ -1,14 +1,55 @@
 package bizctx
 
-import (
-	"context"
-)
+import "context"
 
-// WithAccount 为上下文添加租户信息
-func WithAccount(ctx context.Context, accountID string) context.Context {
-	return WithBizContext(
-		ctx, BizContext{
-			account: accountID,
-		},
-	)
+// KV 用于 Build 的键值对构建函数
+type KV func(bc BizContext)
+
+// 预设字段
+func ID(v string) KV        { return func(bc BizContext) { bc[bizID] = v } }
+func UserID(v string) KV    { return func(bc BizContext) { bc[bizUserID] = v } }
+func TenantID(v string) KV  { return func(bc BizContext) { bc[bizTenantID] = v } }
+func AppID(v string) KV     { return func(bc BizContext) { bc[bizAppID] = v } }
+func ClientIP(v string) KV  { return func(bc BizContext) { bc[bizClientIP] = v } }
+func RequestID(v string) KV { return func(bc BizContext) { bc[bizRequestID] = v } }
+
+// GetID 从 context 获取实体 ID
+func GetID(ctx context.Context) string {
+	return getBizContext(ctx).Get(bizID)
+}
+
+// GetUserID 从 context 获取用户 ID
+func GetUserID(ctx context.Context) string {
+	return getBizContext(ctx).Get(bizUserID)
+}
+
+// GetTenantID 从 context 获取租户 ID
+func GetTenantID(ctx context.Context) string {
+	return getBizContext(ctx).Get(bizTenantID)
+}
+
+// GetAppID 从 context 获取应用 ID
+func GetAppID(ctx context.Context) string {
+	return getBizContext(ctx).Get(bizAppID)
+}
+
+// GetClientIP 从 context 获取客户端 IP
+func GetClientIP(ctx context.Context) string {
+	return getBizContext(ctx).Get(bizClientIP)
+}
+
+// GetRequestID 从 context 获取请求 ID
+func GetRequestID(ctx context.Context) string {
+	return getBizContext(ctx).Get(bizRequestID)
+}
+
+// WithKV 通过 KV 函数批量更新 context 中的 BizContext 字段。
+// 只修改 KV 指定的字段，未涉及的字段保持不变。
+func WithKV(ctx context.Context, kv ...KV) context.Context {
+	bc := getBizContext(ctx)
+	for _, fn := range kv {
+		fn(bc)
+	}
+
+	return withBizContext(ctx, bc)
 }

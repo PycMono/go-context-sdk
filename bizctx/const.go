@@ -1,5 +1,5 @@
 package bizctx
 
-const (
-	bizCtxKey string = "biz-bizctx"
-)
+type contextKey struct{}
+
+var activeBizCtxKey = contextKey{}
