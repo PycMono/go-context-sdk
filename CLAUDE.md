@@ -1,73 +1,46 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
-
-A Go library providing two separate context propagation systems built on top of Go's `context.Context`:
-
-- **`bizctx`** — Business context propagation (userID, tenantID, etc.) independent of system context
-- **`tracing`** — Distributed tracing wrapper around OpenTracing/Jaeger with B3 header propagation
-
-## Build & Test
-
-```bash
-# Build all packages
-go build ./...
-
-# Run all tests
-go test ./...
-
-# Run a single test
-go test ./bizctx -run TestSetNilMap
-
-# Run example HTTP server (listens on :5005)
-go run ./example
-```
+# go-context-sdk Development Guide
 
 ## Architecture
 
-### bizctx — Business Context
+The module has two independent packages:
 
-`BizContext` is a `map[string]string` that stores business fields (userID, tenantID, appID, etc.) separately from Go's `context.Context`.
+- `tracing` is a thin facade over the standard OpenTelemetry global API.
+- `bizctx` stores explicitly named business fields in a separate Context value.
 
-Key design points:
-- Uses an unexported `contextKey` struct (`activeBizCtxKey`) to store the map in `context.Context` via `context.WithValue`
-- **Always returns copies**: `GetBizContext`, `WithBizContext`, and `getBizContext` all return defensive copies so mutations don't leak across context boundaries
-- `WithBizContext(ctx, in)` merges `in` on top of existing values (new values win, old values are preserved)
-- `WithValue` sets a single key on the existing BizContext and returns a new context
-- Preset helpers in `preset.go` (e.g. `UserID("u1")`) are `KV` functions that populate a `BizContext` map
+The only technical correlation identifier is the OTel TraceID. Do not add a Request-ID, UUID fallback, B3 bridge, Baggage propagation, private Provider, or custom Span wrapper.
 
-HTTP propagation: `Inject`/`Extract` use headers with `x-bizctx-` prefix (lowercase keys in headers).
+## Terminal tracing surface
 
-### tracing — Distributed Tracing
+```go
+func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span)
+type Field = attribute.KeyValue
+func KV(key string, value any) Field
+func WithKV(ctx context.Context, fields ...Field) context.Context
+func Extract(ctx context.Context, h http.Header) context.Context
+func Inject(ctx context.Context, h http.Header)
+func TraceIDFromContext(ctx context.Context) string
+const HeaderTraceID = "trace-id"
+```
 
-Wraps OpenTracing/Jaeger with a `Span` struct that combines an `opentracing.Span` with a `SpanContext` (a `map[string]string`).
+`StartSpan` obtains its tracer from `otel.Tracer` with scope name `github.com/PycMono/go-context-sdk` and version `v1.2.0`. It is a low-level instrumentation API for Middleware, Decorator, Provider, Tool Runtime, and Runner implementations; ordinary business examples must not expose `trace.Span` or manual `End` calls.
 
-Key design points:
-- **Auto-initializes on import**: `tracing.go` has an `init()` that reads Jaeger config from env vars and starts a goroutine. The tracer is set as the global OpenTracing tracer
-- `SpanContext` stores B3-style headers (`x-b3-traceid`, `x-b3-spanid`, `x-b3-sampled`) plus custom fields (`request-id`, `x-auth-accountid`, etc.)
-- `SpanFromContext` looks up the span first from our custom context key, then falls back to `opentracing.SpanFromContext`
-- `StartChildSpan` carries over `AccountID` and `RequestID` baggage from parent to child spans
-- `SpanContext.SwapOpentracingSpanContext()` converts our map representation to/from Jaeger's `SpanContext` type for interop with the Jaeger client
-- Request IDs are generated via `NewRequestID()` using UUID v4 with a fixed digit modification (char 15 replaced with `9`)
+`WithKV` updates only the current recording Span and returns the identical Context. It must not create a Span, retain fields for future spans, serialize unsupported values, or fail business execution. Keep all model, Tool, and MCP presets flat in `tracing/preset.go`; do not create preset subpackages. Do not add `Fail`: the layer that creates a Span owns status and lifecycle.
 
-HTTP propagation: `Inject`/`Extract` use standard B3 headers plus custom headers (`request-id`, `x-auth-accountid`, etc.). `Extract` has an allowlist of known headers; additional headers can be passed via `extHeaders`.
+`Extract` and `Inject` call `otel.GetTextMapPropagator`; the application must install `propagation.TraceContext{}`. Library code must import OTel API only. OTel SDK packages are allowed in tests and examples.
 
-### Cross-service flow (example)
+The standard global Noop Provider must remain safe: no network, goroutines, local recording, or generated root TraceID. It may preserve a valid incoming parent TraceID as required by OTel semantics.
 
-The `example/http/server.go` demonstrates the typical pattern:
-1. Incoming request arrives — extract tracing span and bizctx from headers
-2. Start a child span for the operation
-3. Merge bizctx into the Go context
-4. When making downstream HTTP calls: `tracing.Inject(req, span)` and `bizctx.Inject(req, bc)` to propagate both contexts via headers
+## W3C boundary
 
-## Environment Variables (tracing)
+`Extract` accepts exactly one non-comma-joined `traceparent`, silently ignores invalid input, joins multiple `tracestate` field lines on a cloned Header, and leaves the caller's Header unchanged. Public ingress must terminate untrusted external Trace Context before internal propagation. TraceID is not an authorization, idempotency, or identity value.
 
-The Jaeger tracer reads standard env vars at init time:
-- `JAEGER_SERVICE_NAME` / `SERVICE_NAME` — service name
-- `JAEGER_AGENT_HOST`, `JAEGER_AGENT_PORT` — agent endpoint
-- `JAEGER_COLLECTOR_ENDPOINT` — collector endpoint
-- `JAEGER_SAMPLER_TYPE`, `JAEGER_SAMPLER_PARAM` — sampling config
+## BizContext
 
-If no sampler config is provided, defaults to `const` sampler with param `1` (sample everything).
+Supported presets are `ID`, `UserID`, `TenantID`, `AppID`, and `ClientIP`. Keep copy-on-read/copy-on-write behavior. Do not add a generic correlation or request identifier without a separate business contract.
+
+## Testing
+
+- Install global Provider/Propagator state only inside tests and restore the previous values with `t.Cleanup`.
+- Use the OTel SDK In-Memory SpanRecorder for Span behavior.
+- Cover valid, missing, malformed, multi-value, comma-joined, and nil HTTP propagation inputs.
+- Run `go test -race ./...`, `git diff --check`, confirm `go mod graph` contains no Jaeger/OpenTracing dependency, and confirm production Go files do not import `github.com/google/uuid`. The test/example OTel SDK may retain its own indirect UUID dependency.

@@ -5,10 +5,20 @@ import (
 	"net/http"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
+func installTraceContextPropagator(t *testing.T) {
+	t.Helper()
+	previousPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(previousPropagator) })
+}
+
 func TestExtractValidTraceContext(t *testing.T) {
+	installTraceContextPropagator(t)
 	header := make(http.Header)
 	header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	header.Set("tracestate", "vendor=value")
@@ -31,6 +41,7 @@ func TestExtractValidTraceContext(t *testing.T) {
 }
 
 func TestExtractCombinesMultipleTracestateHeaders(t *testing.T) {
+	installTraceContextPropagator(t)
 	header := make(http.Header)
 	header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	header.Add("tracestate", "vendor1=value1")
@@ -48,6 +59,7 @@ func TestExtractCombinesMultipleTracestateHeaders(t *testing.T) {
 }
 
 func TestExtractIgnoresInvalidTraceparent(t *testing.T) {
+	installTraceContextPropagator(t)
 	tests := []struct {
 		name   string
 		header http.Header
@@ -80,6 +92,7 @@ func TestExtractIgnoresInvalidTraceparent(t *testing.T) {
 }
 
 func TestInjectWritesTraceContext(t *testing.T) {
+	installTraceContextPropagator(t)
 	traceState, err := trace.ParseTraceState("vendor=value")
 	if err != nil {
 		t.Fatal(err)
@@ -105,4 +118,40 @@ func TestInjectWritesTraceContext(t *testing.T) {
 
 func TestInjectNilHeaderIsNoop(t *testing.T) {
 	Inject(context.Background(), nil)
+}
+
+type globalPropagatorContextKey struct{}
+
+type markerPropagator struct{}
+
+func (markerPropagator) Inject(_ context.Context, carrier propagation.TextMapCarrier) {
+	carrier.Set("x-global-propagator", "injected")
+}
+
+func (markerPropagator) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
+	return context.WithValue(ctx, globalPropagatorContextKey{}, carrier.Get("x-global-propagator"))
+}
+
+func (markerPropagator) Fields() []string {
+	return []string{"x-global-propagator"}
+}
+
+func TestExtractAndInjectUseGlobalPropagator(t *testing.T) {
+	previousPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(markerPropagator{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(previousPropagator) })
+
+	header := make(http.Header)
+	header.Set("traceparent", "marker-input")
+	header.Set("x-global-propagator", "extracted")
+	ctx := Extract(context.Background(), header)
+	if got := ctx.Value(globalPropagatorContextKey{}); got != "extracted" {
+		t.Fatalf("global Extract marker = %#v, want extracted", got)
+	}
+
+	out := make(http.Header)
+	Inject(ctx, out)
+	if got := out.Get("x-global-propagator"); got != "injected" {
+		t.Fatalf("global Inject marker = %q, want injected", got)
+	}
 }

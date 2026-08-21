@@ -44,7 +44,6 @@ func TestPresetKV(t *testing.T) {
 	TenantID("t1")(bc)
 	AppID("a1")(bc)
 	ClientIP("1.2.3.4")(bc)
-	RequestID("r1")(bc)
 
 	if bc[bizID] != "e1" {
 		t.Fatalf("expected id e1, got %s", bc[bizID])
@@ -64,7 +63,6 @@ func TestWithXXXGetXXX(t *testing.T) {
 		TenantID("t1"),
 		AppID("a1"),
 		ClientIP("1.2.3.4"),
-		RequestID("r1"),
 	)
 
 	if GetID(ctx) != "id1" {
@@ -81,9 +79,6 @@ func TestWithXXXGetXXX(t *testing.T) {
 	}
 	if GetClientIP(ctx) != "1.2.3.4" {
 		t.Fatalf("expected 1.2.3.4, got %s", GetClientIP(ctx))
-	}
-	if GetRequestID(ctx) != "r1" {
-		t.Fatalf("expected r1, got %s", GetRequestID(ctx))
 	}
 }
 

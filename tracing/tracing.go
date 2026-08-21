@@ -1,11 +1,10 @@
 package tracing
 
 import (
-	"os"
-	"sync/atomic"
+	"context"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -13,40 +12,11 @@ const (
 	instrumentationScopeVersion = "v1.2.0"
 )
 
-type tracerProviderHolder struct {
-	provider trace.TracerProvider
-}
-
-var activeTracerProvider atomic.Pointer[tracerProviderHolder]
-
-func init() {
-	activeTracerProvider.Store(&tracerProviderHolder{provider: noop.NewTracerProvider()})
-}
-
-// Init sets the OTel TracerProvider used by this package. A nil provider is ignored.
-func Init(provider trace.TracerProvider) {
-	if provider == nil {
-		return
-	}
-	activeTracerProvider.Store(&tracerProviderHolder{provider: provider})
-}
-
-func tracer() trace.Tracer {
-	provider := activeTracerProvider.Load().provider
-	return provider.Tracer(
+// StartSpan starts a span using the application's global OTel TracerProvider.
+func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	tracer := otel.Tracer(
 		instrumentationScopeName,
 		trace.WithInstrumentationVersion(instrumentationScopeVersion),
 	)
-}
-
-// ServiceName returns the configured service name or the local hostname.
-func ServiceName() string {
-	if serviceName := os.Getenv("OTEL_SERVICE_NAME"); serviceName != "" {
-		return serviceName
-	}
-	if serviceName := os.Getenv("SERVICE_NAME"); serviceName != "" {
-		return serviceName
-	}
-	serviceName, _ := os.Hostname()
-	return serviceName
+	return tracer.Start(ctx, name, opts...)
 }

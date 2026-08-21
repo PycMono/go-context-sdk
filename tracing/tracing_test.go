@@ -2,83 +2,70 @@ package tracing
 
 import (
 	"context"
-	"os"
-	"sync"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-func TestServiceNameUsesOTelPriority(t *testing.T) {
-	t.Setenv("OTEL_SERVICE_NAME", "otel-service")
-	t.Setenv("SERVICE_NAME", "service-name")
-	t.Setenv("JAEGER_SERVICE_NAME", "legacy-jaeger")
-	if got := ServiceName(); got != "otel-service" {
-		t.Fatalf("service name = %q, want otel-service", got)
-	}
-
-	t.Setenv("OTEL_SERVICE_NAME", "")
-	if got := ServiceName(); got != "service-name" {
-		t.Fatalf("service name = %q, want service-name", got)
-	}
-
-	t.Setenv("SERVICE_NAME", "")
-	hostname, err := os.Hostname()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := ServiceName(); got != hostname {
-		t.Fatalf("service name = %q, want hostname %q", got, hostname)
-	}
-}
-
-func newRecordingProvider(t *testing.T) (*sdktrace.TracerProvider, *tracetest.SpanRecorder) {
+func installRecordingProvider(t *testing.T) (*sdktrace.TracerProvider, *tracetest.SpanRecorder) {
 	t.Helper()
+	previousProvider := otel.GetTracerProvider()
 	recorder := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
 	t.Cleanup(func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
+		otel.SetTracerProvider(previousProvider)
+		if err := provider.Shutdown(context.Background()); err != nil {
 			t.Errorf("shutdown tracer provider: %v", err)
 		}
 	})
-	return tp, recorder
+	return provider, recorder
 }
 
-func TestStartSpanFromContextUsesNoopProvider(t *testing.T) {
-	Init(noop.NewTracerProvider())
-
-	ctx, span := StartSpanFromContext(context.Background(), "noop")
-
-	if ctx == nil || span == nil || span.Span == nil {
-		t.Fatalf("invalid start result: ctx=%v span=%#v", ctx, span)
-	}
-	if span.IsRecording() {
-		t.Fatal("span should not record with the noop provider")
-	}
+func installNoopProvider(t *testing.T) {
+	t.Helper()
+	previousProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	t.Cleanup(func() { otel.SetTracerProvider(previousProvider) })
 }
 
-func TestInitUsesProvidedTracerProvider(t *testing.T) {
-	tp, recorder := newRecordingProvider(t)
-	Init(tp)
+func TestStartSpanUsesGlobalProviderAndInstrumentationScope(t *testing.T) {
+	_, recorder := installRecordingProvider(t)
 
-	_, span := StartSpanFromContext(context.Background(), "root")
-	span.Finish()
+	ctx, span := StartSpan(context.Background(), "root")
+	if ctx == nil || span == nil {
+		t.Fatalf("invalid start result: ctx=%v span=%v", ctx, span)
+	}
+	got := trace.SpanFromContext(ctx).SpanContext()
+	want := span.SpanContext()
+	if got.TraceID() != want.TraceID() || got.SpanID() != want.SpanID() {
+		t.Fatalf("context span = %v, returned span = %v", got, want)
+	}
+	span.End()
 
 	ended := recorder.Ended()
 	if len(ended) != 1 || ended[0].Name() != "root" {
 		t.Fatalf("ended spans = %#v, want one root span", ended)
 	}
+	if ended[0].Parent().IsValid() {
+		t.Fatalf("root parent = %v, want invalid", ended[0].Parent())
+	}
+	scope := ended[0].InstrumentationScope()
+	if scope.Name != instrumentationScopeName || scope.Version != instrumentationScopeVersion {
+		t.Fatalf("scope = %#v, want name=%q version=%q", scope, instrumentationScopeName, instrumentationScopeVersion)
+	}
 }
 
-func TestStartSpanFromContextPreservesParent(t *testing.T) {
-	tp, recorder := newRecordingProvider(t)
-	Init(tp)
-	parentCtx, parent := tp.Tracer("test-parent").Start(context.Background(), "parent")
+func TestStartSpanPreservesParentFromGlobalProvider(t *testing.T) {
+	provider, recorder := installRecordingProvider(t)
+	parentCtx, parent := provider.Tracer("test-parent").Start(context.Background(), "parent")
 
-	_, child := StartSpanFromContext(parentCtx, "child")
-	child.Finish()
+	_, child := StartSpan(parentCtx, "child")
+	child.End()
 	parent.End()
 
 	ended := recorder.Ended()
@@ -94,54 +81,40 @@ func TestStartSpanFromContextPreservesParent(t *testing.T) {
 	}
 }
 
-func TestInitNilKeepsProvider(t *testing.T) {
-	tp, recorder := newRecordingProvider(t)
-	Init(tp)
-	Init(nil)
+func TestStartSpanWithNoopDoesNotGenerateRootTraceID(t *testing.T) {
+	installNoopProvider(t)
 
-	_, span := StartSpanFromContext(context.Background(), "after-nil")
-	span.Finish()
+	ctx, span := StartSpan(context.Background(), "noop-root")
+	defer span.End()
 
-	if got := len(recorder.Ended()); got != 1 {
-		t.Fatalf("ended span count = %d, want 1", got)
+	if span.IsRecording() {
+		t.Fatal("noop span should not record")
+	}
+	if got := trace.SpanContextFromContext(ctx); got.IsValid() {
+		t.Fatalf("noop root span context = %v, want invalid", got)
+	}
+	if got := TraceIDFromContext(ctx); got != "" {
+		t.Fatalf("noop root trace ID = %q, want empty", got)
 	}
 }
 
-func TestInitConcurrentWithStartSpan(t *testing.T) {
-	first, firstRecorder := newRecordingProvider(t)
-	second, secondRecorder := newRecordingProvider(t)
-	Init(first)
+func TestStartSpanWithNoopPreservesValidParentTraceID(t *testing.T) {
+	installNoopProvider(t)
+	parent := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		SpanID:     trace.SpanID{1, 2, 3, 4, 5, 6, 7, 8},
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	})
+	parentCtx := trace.ContextWithRemoteSpanContext(context.Background(), parent)
 
-	const iterations = 1000
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
+	ctx, span := StartSpan(parentCtx, "noop-child")
+	defer span.End()
 
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < iterations; i++ {
-			if i%2 == 0 {
-				Init(first)
-			} else {
-				Init(second)
-			}
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < iterations; i++ {
-			_, span := StartSpanFromContext(context.Background(), "concurrent")
-			span.Finish()
-		}
-	}()
-
-	close(start)
-	wg.Wait()
-
-	if got := len(firstRecorder.Ended()) + len(secondRecorder.Ended()); got != iterations {
-		t.Fatalf("ended span count = %d, want %d", got, iterations)
+	if got := trace.SpanContextFromContext(ctx).TraceID(); got != parent.TraceID() {
+		t.Fatalf("noop child trace ID = %s, want %s", got, parent.TraceID())
+	}
+	if got := TraceIDFromContext(ctx); got != parent.TraceID().String() {
+		t.Fatalf("TraceIDFromContext = %q, want %q", got, parent.TraceID())
 	}
 }

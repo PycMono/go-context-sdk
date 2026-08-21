@@ -11,7 +11,9 @@ import (
 
 	"github.com/PycMono/go-context-sdk/bizctx"
 	"github.com/PycMono/go-context-sdk/tracing"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type server struct {
@@ -19,11 +21,18 @@ type server struct {
 	forward  string
 	ip       string
 	hostname string
+	client   *http.Client
 }
 
 // NewServer creates a new server
 func NewServer(forward, grpcForward, welcome string) (*server, error) {
-	svr := &server{forward: forward, welcome: welcome}
+	svr := &server{
+		forward: forward,
+		welcome: welcome,
+		client: &http.Client{
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		},
+	}
 	svr.hostname, _ = os.Hostname()
 	svr.ip, _ = externalIP()
 
@@ -32,38 +41,47 @@ func NewServer(forward, grpcForward, welcome string) (*server, error) {
 
 // SpanHandler echos back the request body as a response
 func (s *server) SpanHandler(writer http.ResponseWriter, request *http.Request) {
-	ctx := request.Context()
+	ctx := tracing.Extract(request.Context(), request.Header)
 
 	// 从 context 中恢复 parent span 并创建子 span
-	ctx, span := tracing.StartSpanFromContext(ctx, "span-test-parent")
-	defer span.Finish()
+	ctx, span := tracing.StartSpan(ctx, "span-test-parent", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
 
-	nspan := span.StartChildSpan("span-test-op1")
-	nspan.SetTag("my-custom-account", "user1")
-	nspan.LogFields(
+	_, nspan := tracing.StartSpan(ctx, "span-test-op1")
+	nspan.SetAttributes(attribute.String("my-custom-account", "user1"))
+	nspan.AddEvent("custom-log", trace.WithAttributes(
 		attribute.String("event", "custom-log"),
 		attribute.String("account", "user1"),
-	)
-	nspan.Finish()
+	))
+	nspan.End()
 
-	nspan = span.StartChildSpan("span-test-op2")
-	nspan.Finish()
+	_, nspan = tracing.StartSpan(ctx, "span-test-op2")
+	nspan.End()
 
 	// 在内存中设置业务上下文（bizctx 的 HTTP 传输由 go-gin-sdk 或业务方自行实现）
 	ctx = bizctx.WithKV(ctx, bizctx.UserID("user1"), bizctx.TenantID("tenant1"))
 
 	// 发起下游 HTTP 调用（tracing 跨服务传播保留，bizctx HTTP 传播需由上层框架处理）
-	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5005/test-span", nil)
-	tracing.Inject(req.Context(), req.Header)
-	resp, err := http.DefaultClient.Do(req)
+	target := s.forward
+	if target == "" {
+		target = "http://localhost:5005/test-span"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		httpError(writer, err)
 		return
 	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		httpError(writer, err)
+		return
+	}
+	defer resp.Body.Close()
 
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		panic(err)
+		httpError(writer, err)
+		return
 	}
 	s.writeResult(ctx, writer, b)
 
@@ -72,14 +90,14 @@ func (s *server) SpanHandler(writer http.ResponseWriter, request *http.Request) 
 
 func (s *server) Redirect(writer http.ResponseWriter, request *http.Request) {
 	ctx := tracing.Extract(request.Context(), request.Header)
-	ctx, nspan := tracing.StartSpanFromContext(ctx, "span-test-op2")
-	nspan.Finish()
+	ctx, nspan := tracing.StartSpan(ctx, "span-test-op2", trace.WithSpanKind(trace.SpanKindServer))
+	defer nspan.End()
 
 	s.writeResult(ctx, writer, []byte("ok"))
 }
 
 func (s *server) writeResult(ctx context.Context, writer http.ResponseWriter, data []byte) {
-	span := tracing.SpanFromContext(ctx)
+	span := trace.SpanFromContext(ctx)
 
 	writer.Write(data)
 	writer.Write([]byte(fmt.Sprintf("----via %s, ip: %s-----\n", s.hostname, s.ip)))

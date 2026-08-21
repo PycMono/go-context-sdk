@@ -6,12 +6,11 @@ import "context"
 type KV func(bc BizContext)
 
 // 预设字段
-func ID(v string) KV        { return func(bc BizContext) { bc[bizID] = v } }
-func UserID(v string) KV    { return func(bc BizContext) { bc[bizUserID] = v } }
-func TenantID(v string) KV  { return func(bc BizContext) { bc[bizTenantID] = v } }
-func AppID(v string) KV     { return func(bc BizContext) { bc[bizAppID] = v } }
-func ClientIP(v string) KV  { return func(bc BizContext) { bc[bizClientIP] = v } }
-func RequestID(v string) KV { return func(bc BizContext) { bc[bizRequestID] = v } }
+func ID(v string) KV       { return func(bc BizContext) { bc[bizID] = v } }
+func UserID(v string) KV   { return func(bc BizContext) { bc[bizUserID] = v } }
+func TenantID(v string) KV { return func(bc BizContext) { bc[bizTenantID] = v } }
+func AppID(v string) KV    { return func(bc BizContext) { bc[bizAppID] = v } }
+func ClientIP(v string) KV { return func(bc BizContext) { bc[bizClientIP] = v } }
 
 // GetID 从 context 获取实体 ID
 func GetID(ctx context.Context) string {
@@ -36,11 +35,6 @@ func GetAppID(ctx context.Context) string {
 // GetClientIP 从 context 获取客户端 IP
 func GetClientIP(ctx context.Context) string {
 	return getBizContext(ctx).Get(bizClientIP)
-}
-
-// GetRequestID 从 context 获取请求 ID
-func GetRequestID(ctx context.Context) string {
-	return getBizContext(ctx).Get(bizRequestID)
 }
 
 // WithKV 通过 KV 函数批量更新 context 中的 BizContext 字段。

@@ -6,16 +6,15 @@ import "context"
 业务上下文
    1、将业务上下文和系统上下文分开，避免业务上下文污染系统上下文。
    2、业务上下文只专注业务字段透传，不关心系统上下文。
-   3、系统上下文关注 reqid、rpc/http调用链等。
+   3、系统上下文关注 OTel SpanContext、rpc/http 调用链等。
 */
 
 const (
-	bizID        = "id"
-	bizUserID    = "userid"
-	bizTenantID  = "tenantid"
-	bizAppID     = "appid"
-	bizClientIP  = "clientip"
-	bizRequestID = "requestid"
+	bizID       = "id"
+	bizUserID   = "userid"
+	bizTenantID = "tenantid"
+	bizAppID    = "appid"
+	bizClientIP = "clientip"
 )
 
 // BizContext 业务上下文

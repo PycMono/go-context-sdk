@@ -1,3 +1,3 @@
 package tracing
 
-const HeaderRequestID = "request-id"
+const HeaderTraceID = "trace-id"
