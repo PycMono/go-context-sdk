@@ -8,6 +8,12 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
+const (
+	// headerTraceparent / headerTracestate 是 W3C Trace Context 规范定义的两个传播头。
+	headerTraceparent = "traceparent"
+	headerTracestate  = "tracestate"
+)
+
 var traceContextPropagator = propagation.TraceContext{}
 
 // Extract returns a context carrying a valid W3C remote parent from h.
@@ -15,14 +21,14 @@ func Extract(ctx context.Context, h http.Header) context.Context {
 	if h == nil {
 		return ctx
 	}
-	traceparents := h.Values("traceparent")
+	traceparents := h.Values(headerTraceparent)
 	if len(traceparents) != 1 || strings.Contains(traceparents[0], ",") {
 		return ctx
 	}
 	carrierHeader := h
-	if tracestate := h.Values("tracestate"); len(tracestate) > 1 {
+	if tracestate := h.Values(headerTracestate); len(tracestate) > 1 {
 		carrierHeader = h.Clone()
-		carrierHeader.Set("tracestate", strings.Join(tracestate, ","))
+		carrierHeader.Set(headerTracestate, strings.Join(tracestate, ","))
 	}
 	return traceContextPropagator.Extract(ctx, propagation.HeaderCarrier(carrierHeader))
 }
