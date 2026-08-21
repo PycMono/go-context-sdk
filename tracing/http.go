@@ -19,7 +19,12 @@ func Extract(ctx context.Context, h http.Header) context.Context {
 	if len(traceparents) != 1 || strings.Contains(traceparents[0], ",") {
 		return ctx
 	}
-	return traceContextPropagator.Extract(ctx, propagation.HeaderCarrier(h))
+	carrierHeader := h
+	if tracestate := h.Values("tracestate"); len(tracestate) > 1 {
+		carrierHeader = h.Clone()
+		carrierHeader.Set("tracestate", strings.Join(tracestate, ","))
+	}
+	return traceContextPropagator.Extract(ctx, propagation.HeaderCarrier(carrierHeader))
 }
 
 // Inject writes the W3C trace context from ctx into h.

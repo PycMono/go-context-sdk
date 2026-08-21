@@ -30,6 +30,23 @@ func TestExtractValidTraceContext(t *testing.T) {
 	}
 }
 
+func TestExtractCombinesMultipleTracestateHeaders(t *testing.T) {
+	header := make(http.Header)
+	header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	header.Add("tracestate", "vendor1=value1")
+	header.Add("tracestate", "vendor2=value2")
+
+	ctx := Extract(context.Background(), header)
+	sc := trace.SpanContextFromContext(ctx)
+
+	if got := sc.TraceState().String(); got != "vendor1=value1,vendor2=value2" {
+		t.Fatalf("tracestate = %q, want both header lines", got)
+	}
+	if got := len(header.Values("tracestate")); got != 2 {
+		t.Fatalf("Extract mutated source tracestate values: %v", header.Values("tracestate"))
+	}
+}
+
 func TestExtractIgnoresInvalidTraceparent(t *testing.T) {
 	tests := []struct {
 		name   string
