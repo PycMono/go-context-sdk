@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/PycMono/go-context-sdk/bizctx"
-	"github.com/PycMono/go-context-sdk/tracing"
-	tracinglog "github.com/opentracing/opentracing-go/log"
 	"io"
 	"net"
 	"net/http"
 	"os"
+
+	"github.com/PycMono/go-context-sdk/bizctx"
+	"github.com/PycMono/go-context-sdk/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type server struct {
@@ -34,14 +35,14 @@ func (s *server) SpanHandler(writer http.ResponseWriter, request *http.Request) 
 	ctx := request.Context()
 
 	// 从 context 中恢复 parent span 并创建子 span
-	span := tracing.StartSpanFromContext(ctx, "span-test-parent")
+	ctx, span := tracing.StartSpanFromContext(ctx, "span-test-parent")
 	defer span.Finish()
 
 	nspan := span.StartChildSpan("span-test-op1")
 	nspan.SetTag("my-custom-account", "user1")
 	nspan.LogFields(
-		tracinglog.String("event", "custom-log"),
-		tracinglog.String("account", "user1"),
+		attribute.String("event", "custom-log"),
+		attribute.String("account", "user1"),
 	)
 	nspan.Finish()
 
@@ -53,7 +54,7 @@ func (s *server) SpanHandler(writer http.ResponseWriter, request *http.Request) 
 
 	// 发起下游 HTTP 调用（tracing 跨服务传播保留，bizctx HTTP 传播需由上层框架处理）
 	req, _ := http.NewRequestWithContext(ctx, "GET", "http://localhost:5005/test-span", nil)
-	tracing.Inject(req, span)
+	tracing.Inject(req.Context(), req.Header)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		httpError(writer, err)
@@ -70,11 +71,9 @@ func (s *server) SpanHandler(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (s *server) Redirect(writer http.ResponseWriter, request *http.Request) {
-	ctx := request.Context()
-	span, _ := tracing.Extract(request)
-	nspan := span.StartChildSpan("span-test-op2")
+	ctx := tracing.Extract(request.Context(), request.Header)
+	ctx, nspan := tracing.StartSpanFromContext(ctx, "span-test-op2")
 	nspan.Finish()
-	ctx = nspan.WithOpentracingContext(ctx)
 
 	s.writeResult(ctx, writer, []byte("ok"))
 }

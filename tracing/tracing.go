@@ -1,88 +1,52 @@
 package tracing
 
 import (
-	"github.com/opentracing/opentracing-go"
-	"github.com/uber/jaeger-client-go"
-	cfg "github.com/uber/jaeger-client-go/config"
-	"log"
 	"os"
-	"os/signal"
-	"strings"
-	"syscall"
+	"sync/atomic"
+
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
-var (
-	// AppName app name
-	AppName string
+const (
+	instrumentationScopeName    = "github.com/PycMono/go-context-sdk"
+	instrumentationScopeVersion = "v1.2.0"
 )
+
+type tracerProviderHolder struct {
+	provider trace.TracerProvider
+}
+
+var activeTracerProvider atomic.Pointer[tracerProviderHolder]
 
 func init() {
-	var stop = make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP, syscall.SIGQUIT)
-
-	// 启动tracing
-	go start(stop)
+	activeTracerProvider.Store(&tracerProviderHolder{provider: noop.NewTracerProvider()})
 }
 
-func start(stop chan os.Signal) {
-	conf, err := cfg.FromEnv()
-	if err != nil {
-		log.Println("Jaeger read configuration from Env failed:", err)
+// Init sets the OTel TracerProvider used by this package. A nil provider is ignored.
+func Init(provider trace.TracerProvider) {
+	if provider == nil {
 		return
 	}
-	if conf.Disabled {
-		log.Println("Jaeger disabled")
-		return
-	}
-	if len(conf.Reporter.CollectorEndpoint) > 0 {
-		log.Println("Jaeger collectorEndpoint:", conf.Reporter.CollectorEndpoint)
-	} else {
-		log.Println("Jaeger localAgentHostPort:", conf.Reporter.LocalAgentHostPort)
-	}
-
-	if len(conf.ServiceName) == 0 {
-		conf.ServiceName = ServiceName()
-	}
-	AppName = conf.ServiceName
-
-	if len(conf.Sampler.Type) == 0 {
-		conf.Sampler.Type = "const"
-		conf.Sampler.Param = 1
-	}
-	conf.Gen128Bit = true
-	logger := cfg.Logger(jaeger.StdLogger)
-	tracer, closer, err := conf.NewTracer(logger)
-	if err != nil {
-		log.Println("Jaeger new tracer failed:", err)
-		return
-	}
-
-	defer func() {
-		log.Println("结束tracing...")
-		err = closer.Close()
-		if err != nil {
-			log.Println("tracer close:", err)
-		}
-	}()
-
-	opentracing.SetGlobalTracer(tracer)
-
-	st := <-stop
-	log.Println("tracer stop:", st)
+	activeTracerProvider.Store(&tracerProviderHolder{provider: provider})
 }
 
-// ServiceName 服务名称
+func tracer() trace.Tracer {
+	provider := activeTracerProvider.Load().provider
+	return provider.Tracer(
+		instrumentationScopeName,
+		trace.WithInstrumentationVersion(instrumentationScopeVersion),
+	)
+}
+
+// ServiceName returns the configured service name or the local hostname.
 func ServiceName() string {
-	if svcName := os.Getenv("SERVICE_NAME"); len(svcName) > 0 {
-		return svcName
+	if serviceName := os.Getenv("OTEL_SERVICE_NAME"); serviceName != "" {
+		return serviceName
 	}
-	if svcName := os.Getenv("JAEGER_SERVICE_NAME"); len(svcName) > 0 {
-		if idx := strings.Index(svcName, "."); idx >= 0 {
-			return svcName[:idx]
-		}
-		return svcName
+	if serviceName := os.Getenv("SERVICE_NAME"); serviceName != "" {
+		return serviceName
 	}
-
-	appName, _ := os.Hostname()
-	return appName
+	serviceName, _ := os.Hostname()
+	return serviceName
 }

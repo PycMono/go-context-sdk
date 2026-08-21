@@ -1,68 +1,31 @@
 package tracing
 
 import (
+	"context"
 	"net/http"
 	"strings"
+
+	"go.opentelemetry.io/otel/propagation"
 )
 
-// Inject 将Span信息注入到 `http.Request` 中
-func Inject(r *http.Request, span *Span) error {
-	if r == nil {
-		return ErrNullRequest
-	}
+var traceContextPropagator = propagation.TraceContext{}
 
-	if span == nil {
-		return nil
+// Extract returns a context carrying a valid W3C remote parent from h.
+func Extract(ctx context.Context, h http.Header) context.Context {
+	if h == nil {
+		return ctx
 	}
-	for k, v := range span.SpanContext {
-		r.Header.Set(k, v)
+	traceparents := h.Values("traceparent")
+	if len(traceparents) != 1 || strings.Contains(traceparents[0], ",") {
+		return ctx
 	}
-	return nil
+	return traceContextPropagator.Extract(ctx, propagation.HeaderCarrier(h))
 }
 
-// Extract 从 `http.Request` 提取Span信息
-func Extract(r *http.Request, extHeaders ...string) (*Span, error) {
-	if r == nil {
-		return nil, ErrNullRequest
+// Inject writes the W3C trace context from ctx into h.
+func Inject(ctx context.Context, h http.Header) {
+	if h == nil {
+		return
 	}
-
-	// 获取请求头中的span信息
-	if span := SpanFromContext(r.Context()); !span.Empty() {
-		return span, nil
-	}
-
-	span := extract(r.Header, extHeaders...)
-	span.Set(HeaderRequestPath, r.URL.Path)
-	return span, nil
-}
-
-func extract(headers map[string][]string, extHeaders ...string) *Span {
-	out := &Span{SpanContext: make(SpanContext)}
-
-	// 定义允许的 tracing header 白名单
-	allowed := map[string]bool{
-		"x-b3-traceid":      true,
-		"x-b3-parentspanid": true,
-		"x-b3-spanid":       true,
-		"x-b3-sampled":      true,
-		HeaderRequestID:     true,
-		HeaderAuthAccountID: true,
-		HeaderRequestPath:   true,
-	}
-	for _, h := range extHeaders {
-		allowed[strings.ToLower(h)] = true
-	}
-
-	for rawKey, rawValue := range headers {
-		var value string
-		if len(rawValue) > 0 {
-			value = rawValue[0]
-		}
-		key := strings.ToLower(rawKey)
-		if !allowed[key] {
-			continue
-		}
-		out.Set(key, value)
-	}
-	return out
+	traceContextPropagator.Inject(ctx, propagation.HeaderCarrier(h))
 }
