@@ -13,6 +13,7 @@ The only technical correlation identifier is the OTel TraceID. Do not add a Requ
 
 ```go
 func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span)
+func WithSpan(ctx context.Context, name string, fn func(context.Context) error, opts ...WithSpanOption) error
 type Field = attribute.KeyValue
 func KV(key string, value any) Field
 func WithKV(ctx context.Context, fields ...Field) context.Context
@@ -23,6 +24,8 @@ const HeaderTraceID = "trace-id"
 ```
 
 `StartSpan` obtains its tracer from `otel.Tracer` with scope name `github.com/PycMono/go-context-sdk` and version `v1.2.0`. It is a low-level instrumentation API for Middleware, Decorator, Provider, Tool Runtime, and Runner implementations; ordinary business examples must not expose `trace.Span` or manual `End` calls.
+
+`WithSpan` owns the Span status and lifecycle for function-scoped work: fn only receives Context, errors are marked with a classified stable description (see `WithErrorClassifier`), and panics are marked then re-panicked unchanged. Streaming spans whose lifecycle spans multiple calls keep manual `StartSpan`/`End`.
 
 `WithKV` updates only the current recording Span and returns the identical Context. It must not create a Span, retain fields for future spans, serialize unsupported values, or fail business execution. Keep all model, Tool, and MCP presets flat in `tracing/preset.go`; do not create preset subpackages. Do not add `Fail`: the layer that creates a Span owns status and lifecycle.
 
